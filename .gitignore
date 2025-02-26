@@ -1,0 +1,18 @@
+# Node modules
+node_modules/
+npm-debug.log
+
+# Environment variables
+.env
+
+# Logs
+logs/
+*.log
+
+# Puppeteer cache
+.cache/
+puppeteer-screenshots/
+
+# Database files (if any local DB is used)
+db.sqlite
+db.sqlite-journal
