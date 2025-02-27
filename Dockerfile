@@ -1,29 +1,15 @@
-# Koristi lakši Node.js Alpine image
-FROM node:18-alpine
+# Use the latest Playwright Docker image
+FROM mcr.microsoft.com/playwright:v1.50.1
 
-# Setiraj radni direktorij
+# Set the working directory
 WORKDIR /app
 
-# Instaliraj potrebne dependencyje (Chromium za Puppeteer)
-RUN apk add --no-cache \
-    chromium \
-    nss \
-    freetype \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont
-
-# Postavi Puppeteer da koristi sistemski Chromium
-ENV PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium-browser"
-
-# Kopiraj package.json i package-lock.json
+# Copy package files and install dependencies
 COPY package.json package-lock.json ./
+RUN npm install
 
-# Instaliraj npm dependencyje
-RUN npm install --omit=dev
-
-# Kopiraj ostatak koda
+# Copy all project files
 COPY . .
 
-# Pokreni aplikaciju
+# Start the application
 CMD ["npm", "start"]

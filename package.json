@@ -10,7 +10,7 @@
     "axios": "^1.6.8",
     "dotenv": "^16.3.1",
     "pg": "^8.11.1",
-    "puppeteer": "^22.8.2"
+    "playwright": "^1.50.1"
   },
   "engines": {
     "node": ">=18.0.0"

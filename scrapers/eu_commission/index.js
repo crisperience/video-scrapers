@@ -1,10 +1,8 @@
-// scrapers/eu_commission/index.js
-
 const axios = require('axios');
 const https = require('https');
 const logger = require('../../common/logger');
 const { initDB, videoExists, saveMetadata, getUnanalyzedVideos, setMomentslabID } = require('../../common/db');
-const { SEARCH_RESULTS, VIDEO_TITLE, VIDEO_DATE, VIDEO_DURATION, DETAIL_TITLE, DETAIL_DATE, DETAIL_DURATION, DETAIL_DESCRIPTION, DETAIL_PERSONALITIES, DETAIL_DOWNLOAD_LINK } = require('./selectors');
+const { SEARCH_RESULTS, DETAIL_TITLE, DETAIL_DESCRIPTION, DETAIL_PERSONALITIES, DETAIL_DOWNLOAD_LINK } = require('./selectors');
 const { randomDelay, USER_AGENT, retry } = require('./utils');
 const { API_TOKEN, ANALYSIS_URL } = require('../../common/config');
 const { initBrowser } = require('./initBrowser');
@@ -12,9 +10,8 @@ const { initBrowser } = require('./initBrowser');
 const BASE_URL = "https://audiovisual.ec.europa.eu/en/search?mediatype=VIDEO&categories=VideoNews&sort=score&direction=desc";
 
 async function getAllVideos(page) {
-    await page.setUserAgent(USER_AGENT);
-    await page.goto(BASE_URL, { waitUntil: 'networkidle2' });
-    await page.waitForSelector(SEARCH_RESULTS, { timeout: 15000 });
+    await page.goto(BASE_URL);
+    await page.waitForSelector(SEARCH_RESULTS);
 
     const videos = await page.$$eval(SEARCH_RESULTS, elements => {
         return elements.map(elem => {
@@ -34,12 +31,12 @@ async function getAllVideos(page) {
 }
 
 async function getVideoMetadata(page, video_url) {
-    await page.goto(video_url, { waitUntil: 'networkidle2' });
-    await page.waitForSelector(DETAIL_TITLE, { timeout: 10000 });
+    await page.goto(video_url);
+    await page.waitForSelector(DETAIL_TITLE);
     await randomDelay();
 
     try {
-        const title = await page.$eval(DETAIL_TITLE, el => el.textContent.trim());
+        const title = await page.locator(DETAIL_TITLE).innerText();
 
         const published_date = await page.evaluate(() => {
             const elements = document.querySelectorAll("div.avs-media-details p");
@@ -61,9 +58,9 @@ async function getVideoMetadata(page, video_url) {
             return "";
         });
 
-        const description = await page.$eval(DETAIL_DESCRIPTION, el => el.textContent.trim()).catch(() => "");
+        const description = await page.locator(DETAIL_DESCRIPTION).innerText().catch(() => "");
         const personalities = await page.$$eval(DETAIL_PERSONALITIES, links => links.map(a => a.textContent.trim()).join(", "));
-        const download_url = await page.$eval(DETAIL_DOWNLOAD_LINK, el => el.getAttribute("href"));
+        const download_url = await page.locator(DETAIL_DOWNLOAD_LINK).getAttribute("href");
 
         return { title, published_date, duration, description, personalities, download_url };
     } catch (e) {
@@ -74,7 +71,8 @@ async function getVideoMetadata(page, video_url) {
 
 async function scrapeLatestFive() {
     const browser = await initBrowser();
-    const page = await browser.newPage();
+    const context = await browser.newContext({ userAgent: USER_AGENT });
+    const page = await context.newPage();
     await randomDelay();
 
     try {

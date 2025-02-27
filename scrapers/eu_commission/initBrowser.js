@@ -1,16 +1,8 @@
-const puppeteer = require('puppeteer');
+const { chromium } = require('playwright');
 
 async function initBrowser() {
-    return puppeteer.launch({
-        headless: "new",
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-gpu',
-            '--disable-dev-shm-usage',
-            '--disable-software-rasterizer'
-        ],
-        executablePath: process.env.CHROMIUM_PATH || puppeteer.executablePath()
+    return await chromium.launch({
+        headless: true
     });
 }
 
