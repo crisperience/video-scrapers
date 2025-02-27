@@ -1,7 +1,7 @@
 FROM mcr.microsoft.com/playwright:v1.50.1
 
-# Install PostgreSQL client for debugging
-RUN apt-get update && apt-get install -y postgresql-client
+# Install PostgreSQL client and PM2 globally
+RUN apt-get update && apt-get install -y postgresql-client && npm install -g pm2
 
 WORKDIR /app
 
@@ -10,4 +10,7 @@ RUN npm install
 
 COPY . .
 
-CMD ["node", "scrapers/eu_commission/index.js"]
+# Ensure ecosystem.config.js is copied into /app
+COPY ecosystem.config.js ./
+
+CMD ["pm2-runtime", "start", "ecosystem.config.js"]

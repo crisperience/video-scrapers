@@ -15,9 +15,13 @@ async function getAllVideos(page) {
 
     const videos = await page.$$eval(SEARCH_RESULTS, elements => {
         return elements.map(elem => {
-            let href = elem.getAttribute('href');
+            let href = elem.getAttribute('href') || '';
             if (href && !href.startsWith('http')) {
-                href = "https://audiovisual.ec.europa.eu" + href;
+                if (href.startsWith('//')) {
+                    href = 'https:' + href;
+                } else {
+                    href = 'https://audiovisual.ec.europa.eu' + href;
+                }
             }
             const video_id = href ? href.split('/').pop() : '';
             return { video_id, url: href };
@@ -71,10 +75,14 @@ async function getVideoMetadata(page, video_url) {
             await page.waitForSelector("#downloadlink", { timeout: 5000 }).catch(() => null);
         }
 
-        // Extract the download link
+        // Extract the download link and ensure it has "https:" prefix if it starts with "//"
         const download_url = await page.evaluate(() => {
             const link = document.querySelector("#downloadlink");
-            return link ? (link.getAttribute("ng-href") || link.getAttribute("href")) : null;
+            let href = link ? (link.getAttribute("ng-href") || link.getAttribute("href")) : null;
+            if (href && href.startsWith("//")) {
+                href = "https:" + href;
+            }
+            return href;
         });
 
         // Collect missing fields for logging
