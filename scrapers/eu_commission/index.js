@@ -10,7 +10,7 @@ const { initBrowser } = require('./initBrowser');
 const BASE_URL = "https://audiovisual.ec.europa.eu/en/search?mediatype=VIDEO&categories=VideoNews&sort=score&direction=desc";
 
 async function getAllVideos(page) {
-    await page.goto(BASE_URL);
+    await page.goto(BASE_URL, { waitUntil: 'networkidle' });
     await page.waitForSelector(SEARCH_RESULTS);
 
     const videos = await page.$$eval(SEARCH_RESULTS, elements => {
@@ -31,21 +31,24 @@ async function getAllVideos(page) {
 }
 
 async function getVideoMetadata(page, video_url) {
-    await page.goto(video_url);
-    await page.waitForSelector(DETAIL_TITLE);
+    await page.goto(video_url, { waitUntil: 'networkidle' });
+    await page.waitForSelector(DETAIL_TITLE).catch(() => null);
     await randomDelay();
 
     try {
-        const title = await page.locator(DETAIL_TITLE).innerText();
+        const title = await page.evaluate(() => {
+            const element = document.querySelector("h1.details-main-title");
+            return element ? element.innerText.trim() : null;
+        });
 
         const published_date = await page.evaluate(() => {
-            const elements = document.querySelectorAll("div.avs-media-details p");
+            const elements = document.querySelectorAll("p.ecl-paragraph");
             for (let el of elements) {
                 if (el.textContent.includes("Date:")) {
-                    return el.textContent.split("Date:").pop().trim();
+                    return el.textContent.replace(/.*Date:\s*/, "").trim();
                 }
             }
-            return "";
+            return null;
         });
 
         const duration = await page.evaluate(() => {
@@ -55,14 +58,45 @@ async function getVideoMetadata(page, video_url) {
                     return el.textContent.split("Duration:").pop().trim();
                 }
             }
-            return "";
+            return null;
         });
 
-        const description = await page.locator(DETAIL_DESCRIPTION).innerText().catch(() => "");
-        const personalities = await page.$$eval(DETAIL_PERSONALITIES, links => links.map(a => a.textContent.trim()).join(", "));
-        const download_url = await page.locator(DETAIL_DOWNLOAD_LINK).getAttribute("href");
+        const description = await page.locator(DETAIL_DESCRIPTION).innerText().catch(() => "No description available");
+        const personalities = await page.$$eval(DETAIL_PERSONALITIES, links => links.map(a => a.textContent.trim()).join(", ")) || "No personalities listed";
 
-        return { title, published_date, duration, description, personalities, download_url };
+        // Click "Available HD MP4" button if it exists
+        const expandButton = page.locator("a[ng-if='key === \"FHDMP4\"']");
+        if (await expandButton.isVisible()) {
+            await expandButton.click();
+            await page.waitForSelector("#downloadlink", { timeout: 5000 }).catch(() => null);
+        }
+
+        // Extract the download link
+        const download_url = await page.evaluate(() => {
+            const link = document.querySelector("#downloadlink");
+            return link ? (link.getAttribute("ng-href") || link.getAttribute("href")) : null;
+        });
+
+        // Collect missing fields for logging
+        let missingFields = [];
+        if (!title) missingFields.push("title");
+        if (!published_date) missingFields.push("published_date");
+        if (!duration) missingFields.push("duration");
+        if (!download_url) missingFields.push("download_url");
+
+        if (missingFields.length > 0) {
+            logger.warn(`Video ${video_url} is missing fields: ${missingFields.join(", ")}`);
+        }
+
+        return {
+            title: title || "Untitled Video",
+            published_date: published_date || "Unknown Date",
+            duration: duration || "00:00",
+            description,
+            personalities,
+            download_url: download_url || "No download available"
+        };
+
     } catch (e) {
         logger.error(`Failed to extract metadata from ${video_url}: ${e.message}`);
         return null;
@@ -77,25 +111,41 @@ async function scrapeLatestFive() {
 
     try {
         const videos = await retry(() => getAllVideos(page));
-        for (const vid of videos) {
-            if (await videoExists(vid.video_id)) {
+
+        // Ensure sorting is applied before slicing
+        const latestVideos = videos
+            .sort((a, b) => parseInt(b.video_id.split('-').pop(), 10) - parseInt(a.video_id.split('-').pop(), 10))
+            .slice(0, 5); // Take only the latest 5 from the website
+
+        logger.info(`Found ${latestVideos.length} latest videos: ${latestVideos.map(v => v.video_id).join(', ')}`);
+
+        for (const vid of latestVideos) {
+            const exists = await videoExists(vid.video_id);
+            if (exists) {
                 logger.info(`Video ${vid.video_id} already in database, skipping.`);
                 continue;
             }
 
             try {
+                logger.debug(`Fetching metadata for ${vid.video_id}...`);
                 const metadata = await retry(() => getVideoMetadata(page, vid.url));
+
                 if (metadata) {
-                    await saveMetadata(
-                        vid.video_id,
-                        metadata.published_date,
-                        metadata.title,
-                        metadata.description,
-                        metadata.personalities,
-                        metadata.duration,
-                        metadata.download_url
-                    );
-                    logger.info(`Saved metadata for video ${vid.video_id}.`);
+                    // Ensure metadata isn't saved multiple times due to retry
+                    if (!(await videoExists(vid.video_id))) {
+                        await saveMetadata(
+                            vid.video_id,
+                            metadata.published_date,
+                            metadata.title,
+                            metadata.description,
+                            metadata.personalities,
+                            metadata.duration,
+                            metadata.download_url
+                        );
+                        logger.info(`Saved metadata for video ${vid.video_id}.`);
+                    } else {
+                        logger.info(`Video ${vid.video_id} was already saved after retry, skipping.`);
+                    }
                 } else {
                     logger.warn(`No metadata found for video ${vid.video_id}.`);
                 }

@@ -16,3 +16,6 @@ puppeteer-screenshots/
 # Database files (if any local DB is used)
 db.sqlite
 db.sqlite-journal
+
+# MacOS
+.DS_Store
