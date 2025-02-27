@@ -134,6 +134,7 @@ async function scrapeLatestFive() {
                     // Ensure metadata isn't saved multiple times due to retry
                     if (!(await videoExists(vid.video_id))) {
                         await saveMetadata(
+                            "EU Commission",
                             vid.video_id,
                             metadata.published_date,
                             metadata.title,

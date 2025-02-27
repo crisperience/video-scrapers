@@ -4,14 +4,13 @@ const logger = require('./logger');
 
 // Ensure the DATABASE_URL is set in the environment
 const connectionString = process.env.DATABASE_URL;
-
 if (!connectionString) {
   throw new Error("DATABASE_URL is not set! Check your .env file or environment variables.");
 }
 
 logger.info(`Connecting to database: "${connectionString}"`);
 
-// Manually parsing DATABASE_URL
+// Manually parse the DATABASE_URL
 let dbConfig;
 try {
   const url = new URL(connectionString);
@@ -19,9 +18,9 @@ try {
     user: url.username,
     password: url.password,
     host: url.hostname,
-    port: url.port || 5432, // Default PostgreSQL port if not specified
-    database: url.pathname.replace('/', ''), // Remove leading '/'
-    ssl: { rejectUnauthorized: false }, // Ensure SSL is disabled if not needed
+    port: url.port || 5432, // fallback if port not specified
+    database: url.pathname.replace('/', ''), // remove leading '/'
+    ssl: { rejectUnauthorized: false },
   };
 } catch (error) {
   logger.error(`Invalid DATABASE_URL: ${connectionString}`);
@@ -37,6 +36,7 @@ async function initDB() {
   const createTableQuery = `
     CREATE TABLE IF NOT EXISTS public.videos (
       id SERIAL PRIMARY KEY,
+      content_provider TEXT,
       video_id TEXT UNIQUE NOT NULL,
       published_date TEXT,
       title TEXT,
@@ -49,6 +49,7 @@ async function initDB() {
     );
     CREATE INDEX IF NOT EXISTS video_id_index ON public.videos(video_id);
   `;
+
   try {
     await pool.query(createTableQuery);
     logger.info("PostgreSQL database initialized.");
@@ -61,27 +62,30 @@ async function initDB() {
 // Check if video already exists in the database
 async function videoExists(video_id) {
   const res = await pool.query("SELECT COUNT(*) FROM public.videos WHERE video_id = $1", [video_id]);
-  return res.rows[0].count > 0;
+  return parseInt(res.rows[0].count, 10) > 0;
 }
 
-// Save video metadata to the database
-async function saveMetadata(video_id, published_date, title, description, personalities, duration, download_url) {
+// Save video metadata, including content_provider
+async function saveMetadata(content_provider, video_id, published_date, title, description, personalities, duration, download_url) {
   const insertQuery = `
-    INSERT INTO public.videos (video_id, published_date, title, description, personalities, duration, download_url)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO public.videos (content_provider, video_id, published_date, title, description, personalities, duration, download_url)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     ON CONFLICT (video_id) DO NOTHING;
   `;
   try {
-    await pool.query(insertQuery, [video_id, published_date, title, description, personalities, duration, download_url]);
-    logger.info(`Saved metadata for video_id: ${video_id}`);
+    await pool.query(insertQuery, [content_provider, video_id, published_date, title, description, personalities, duration, download_url]);
+    logger.info(`Saved metadata for video_id: ${video_id}, provider: ${content_provider}`);
   } catch (error) {
-    logger.error(`Error saving metadata for video_id: ${video_id} - ${error.message}`);
+    logger.error(`Error saving metadata (video_id: ${video_id}): ${error.message}`);
   }
 }
 
 // Get unanalyzed videos (videos without a MomentsLab ID)
 async function getUnanalyzedVideos(limit = 5) {
-  const res = await pool.query("SELECT video_id, title, download_url FROM public.videos WHERE momentslab_id IS NULL ORDER BY id DESC LIMIT $1", [limit]);
+  const res = await pool.query(
+    "SELECT video_id, title, download_url FROM public.videos WHERE momentslab_id IS NULL ORDER BY id DESC LIMIT $1",
+    [limit]
+  );
   return res.rows;
 }
 
