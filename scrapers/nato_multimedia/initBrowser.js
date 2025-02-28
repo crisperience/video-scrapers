@@ -43,7 +43,7 @@ const iPhone = devices['iPhone 13 Pro'];
     await page.click('button[name="login@action"]');
 
     // Possibly wait for a known post-login element to appear
-    await page.waitForSelector('.some-post-login-element', { timeout: 60000 });
+    await page.waitForSelector('button#dropdownMenu1', { timeout: 60000 });
 
     // Continue your scraping...
 
