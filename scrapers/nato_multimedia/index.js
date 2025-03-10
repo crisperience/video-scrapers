@@ -1,126 +1,194 @@
-// index.js
-const { addExtra } = require('playwright-extra');
-const playwright = addExtra(require('playwright'));
-const stealth = require("puppeteer-extra-plugin-stealth")();
-playwright.use(stealth);
-
-const { initBrowser } = require('./initBrowser');
-const { saveMetadata, videoExists } = require('../../common/db');
+const { fetchPageContent } = require('./initBrowser');
+const cheerio = require('cheerio');
 const selectors = require('./selectors');
+const { saveMetadata, videoExists } = require('../../common/db');
 const logger = require('../../common/logger');
-const { randomDelay, retry, USER_AGENT } = require('./utils');
+const { retry } = require('./utils');
+const fetch = require('node-fetch'); // Using node-fetch v2
+const tough = require('tough-cookie');
+const fetchCookie = require('fetch-cookie').default;
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
-async function login(page) {
-    // Navigate to the search page where the login is available
-    await page.goto('https://www.natomultimedia.tv/app/search?s.q=&s.o=date&s.g=1&s.g=2&s.l=&s.df=&s.dt=&s.nr=&s.lm=&s.lmi=&s.lmc=&s%40action=search', { waitUntil: 'domcontentloaded' });
-    // Add a random delay to simulate human behavior
-    await randomDelay();
-    // Scroll down to simulate natural user activity
-    await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-    await randomDelay();
-    // Click the login button and wait for the login form to appear
-    await page.click(selectors.loginButton);
-    await page.waitForSelector(selectors.loginForm);
-    // Fill in the login credentials
-    await page.fill(selectors.emailField, 'martin@crisp.hr');
-    await page.fill(selectors.passwordField, '20wVUSDwZR7Jkk9Y');
-    await randomDelay();
-    // Submit the login form
-    await page.click(selectors.submitButton);
-    // Wait for the "User" button to appear, confirming a successful login
-    await page.waitForSelector('button#dropdownMenu1', { timeout: 60000 });
-    // Optionally wait until the login form is hidden
-    await page.waitForSelector(selectors.loginForm, { state: 'hidden', timeout: 30000 });
+puppeteer.use(StealthPlugin());
+
+const jar = new tough.CookieJar();
+const fetchWithCookies = fetchCookie(fetch, jar);
+
+/**
+ * Converts a date string from "21 Feb 2025" to "21/02/2025".
+ */
+function formatDate(dateStr) {
+    const months = {
+        Jan: '01', Feb: '02', Mar: '03', Apr: '04',
+        May: '05', Jun: '06', Jul: '07', Aug: '08',
+        Sep: '09', Oct: '10', Nov: '11', Dec: '12'
+    };
+    const [day, month, year] = dateStr.split(' ');
+    return `${day.padStart(2, '0')}/${months[month]}/${year}`;
 }
 
-async function getVideos(page) {
-    // Navigate to the search page to load video results
-    await page.goto('https://www.natomultimedia.tv/app/search?s.q=&s.o=date&s.g=1&s.g=2&s.l=&s.df=&s.dt=&s.nr=&s.lm=&s.lmi=&s.lmc=&s%40action=search', { waitUntil: 'networkidle' });
-    await page.waitForSelector(selectors.videoResult);
-    // Extract basic video info from the video listing
-    const videos = await page.$$eval(selectors.videoResult, els =>
-        els.map(el => {
-            const link = el.querySelector('a');
-            const url = link.href;
-            const video_id = url.split('/').pop();
-            return { video_id, url };
-        })
-    );
+/**
+ * Converts a duration string (e.g., "00:30") to "00:00:30" format.
+ */
+function formatDuration(durationStr) {
+    const parts = durationStr.split(':').map(p => p.padStart(2, '0'));
+    if (parts.length === 1) return `00:00:${parts[0]}`;
+    if (parts.length === 2) return `00:${parts[0]}:${parts[1]}`;
+    return durationStr;
+}
+
+/**
+ * Fetch video listings from the search page.
+ * Returns an array of videos with id, url, duration, and a placeholder download URL.
+ */
+async function getVideos() {
+    const url = "https://www.natomultimedia.tv/app/search?s.q=&s.o=date&s.g=1&s.g=2";
+    logger.info(`Fetching videos from: ${url}`);
+    const html = await fetchPageContent(url);
+    if (!html) {
+        logger.error("Failed to retrieve video listings.");
+        return [];
+    }
+    const $ = cheerio.load(html);
+    const videos = [];
+    $(selectors.videoResult).each((_, el) => {
+        const link = $(el).find("a").attr("href");
+        const durationText = $(el).find('.type').text().trim();
+        const duration = formatDuration(durationText);
+        if (link) {
+            const video_id = link.split('/').pop();
+            const placeholder_download = `https://www.natomultimedia.tv/app/download/asset/${video_id}/full_hd_8`;
+            videos.push({
+                video_id,
+                url: `https://www.natomultimedia.tv${link}`,
+                duration,
+                placeholder_download
+            });
+        }
+    });
+    logger.info(`Found ${videos.length} videos.`);
     return videos.slice(0, 5);
 }
 
-async function getVideoMetadata(page, video_url) {
-    // Navigate to the video detail page
-    await page.goto(video_url, { waitUntil: 'networkidle' });
-    await page.waitForSelector(selectors.title);
-    // Extract metadata from the page
-    const title = await page.$eval(selectors.title, el => el.innerText.trim());
-    const description = await page.$eval(selectors.description, el => el.innerText.trim());
-    const published_date = await page.$eval(selectors.publishedDate, el => el.innerText.trim());
-    const duration = await page.$eval(selectors.duration, el => el.innerText.trim());
-
-    // Click the download dropdown and wait for the full HD download link to appear
-    await page.waitForSelector(selectors.downloadDropdown, { timeout: 30000 });
-    await page.click(selectors.downloadDropdown);
-    await page.waitForSelector(selectors.downloadLinkFullHD, { timeout: 30000 });
-    const download_url = await page.$eval(selectors.downloadLinkFullHD, el => el.href).catch(() => 'No download available');
-
-    return { title, description, published_date, duration, download_url };
+/**
+ * Fetch metadata from a video asset page.
+ * Extracts title, description, published date and returns an object with these and other info.
+ */
+async function getVideoMetadata(video_url, placeholder_download, duration) {
+    logger.info(`Fetching metadata from: ${video_url}`);
+    const html = await fetchPageContent(video_url);
+    if (!html) {
+        logger.error(`Failed to retrieve metadata for ${video_url}`);
+        return null;
+    }
+    const $ = cheerio.load(html);
+    const title = $(selectors.title).text().trim();
+    const description = $(selectors.description).text().trim();
+    const rawDate = $(selectors.publishedDate).text().trim().match(/\d{2} \w{3} \d{4}/);
+    const published_date = rawDate ? formatDate(rawDate[0]) : "Unknown";
+    return { title, description, published_date, duration, placeholder_download };
 }
 
-(async () => {
-    // Launch the browser using playwright-extra with stealth (headful mode for testing)
-    const browser = await playwright.chromium.launch({
-        headless: false,
-        args: ['--disable-blink-features=AutomationControlled']
-    });
-    // Create a new context with custom headers to mimic genuine traffic
-    const context = await browser.newContext({
-        userAgent: USER_AGENT,
-        extraHTTPHeaders: {
-            'Accept-Language': 'en-US,en;q=0.9'
+/**
+ * Open a placeholder download URL in a new tab and extract the final download URL.
+ * After navigation, we simply capture page.url(), which now holds the full signed URL.
+ */
+async function extractFinalUrlFromPlaceholder(url, browser) {
+    let finalUrl = "UNAUTHORIZED";
+    let page;
+    try {
+        page = await browser.newPage();
+        await page.setUserAgent(
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:135.0) Gecko/20100101 Firefox/135.0'
+        );
+        // Navigate and wait for network idle to allow any redirects to complete.
+        await page.goto(url, { waitUntil: 'networkidle2' });
+        finalUrl = page.url();
+        // If the URL hasn't changed, as a fallback, try evaluating body text.
+        if (finalUrl === url) {
+            const textContent = await page.evaluate(() => document.body.innerText.trim());
+            if (textContent && textContent.startsWith('http')) {
+                finalUrl = textContent;
+            }
         }
-    });
-    const page = await context.newPage();
+    } catch (err) {
+        logger.error(`Error extracting final URL from ${url}: ${err.message}`);
+    } finally {
+        if (page) await page.close();
+    }
+    return finalUrl;
+}
 
-    // Execute the login flow with anti-detection techniques
-    await login(page);
-    await randomDelay();
+/**
+ * Launch a Puppeteer browser instance and extract final download URLs for each video.
+ */
+async function extractFinalUrls(metadataList) {
+    let browser;
+    try {
+        browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        const finalUrlPromises = metadataList.map(item =>
+            extractFinalUrlFromPlaceholder(item.meta.placeholder_download, browser)
+        );
+        const finalUrls = await Promise.all(finalUrlPromises);
+        finalUrls.forEach((url, i) => {
+            metadataList[i].meta.download_url = url;
+            logger.info(`Final URL for video ${metadataList[i].video_id}: ${url}`);
+        });
+    } catch (err) {
+        logger.error(`Error during final URL extraction: ${err.message}`);
+    } finally {
+        if (browser) await browser.close();
+    }
+}
 
-    // Retrieve video listings
-    const videos = await retry(() => getVideos(page));
+/**
+ * Main function: scrape video listings, retrieve metadata, extract final download URLs,
+ * and save data to the database.
+ */
+(async () => {
+    logger.info("Starting NATO Multimedia scraper.");
+    const videos = await retry(getVideos);
+    const metadataList = [];
 
-    // Process each video
     for (const vid of videos) {
         if (await videoExists(vid.video_id)) {
-            logger.info(`Video ${vid.video_id} exists. Skipping.`);
+            logger.info(`Video ${vid.video_id} already exists. Skipping.`);
             continue;
         }
-
         try {
-            logger.debug(`Fetching metadata for ${vid.video_id}`);
-            const metadata = await retry(() => getVideoMetadata(page, vid.url));
-
-            if (metadata) {
-                // Save the metadata; no personalities for NATO Multimedia.
-                await saveMetadata(
-                    "NATO Multimedia",
-                    vid.video_id,
-                    metadata.published_date,
-                    metadata.title,
-                    metadata.description,
-                    "", // no personalities
-                    metadata.duration,
-                    metadata.download_url
-                );
-                logger.info(`Saved video ${vid.video_id}`);
+            logger.debug(`Fetching metadata for video ${vid.video_id}`);
+            const meta = await retry(() =>
+                getVideoMetadata(vid.url, vid.placeholder_download, vid.duration)
+            );
+            if (meta) {
+                metadataList.push({ video_id: vid.video_id, meta });
             } else {
-                logger.warn(`No metadata for video ${vid.video_id}`);
+                logger.warn(`No metadata found for video ${vid.video_id}`);
             }
         } catch (err) {
-            logger.error(`Error for video ${vid.video_id}: ${err.message}`);
+            logger.error(`Error processing video ${vid.video_id}: ${err.message}`);
         }
     }
 
-    await browser.close();
+    await extractFinalUrls(metadataList);
+
+    for (const item of metadataList) {
+        try {
+            await saveMetadata(
+                "NATO Multimedia",
+                item.video_id,
+                item.meta.published_date,
+                item.meta.title,
+                item.meta.description,
+                "", // No personalities for NATO Multimedia
+                item.meta.duration,
+                item.meta.download_url
+            );
+            logger.info(`Saved video ${item.video_id}`);
+        } catch (err) {
+            logger.error(`Error saving video ${item.video_id}: ${err.message}`);
+        }
+    }
+    logger.info("Scraping completed.");
 })();

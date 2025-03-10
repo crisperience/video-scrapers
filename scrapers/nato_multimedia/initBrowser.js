@@ -1,51 +1,48 @@
-const { chromium, devices } = require('playwright');
-// Example phone or desktop device to emulate
-const iPhone = devices['iPhone 13 Pro'];
+const scrapingbee = require('scrapingbee');
 
-(async () => {
-    // Keep headless: true
-    const browser = await chromium.launch({
-        headless: true, args: [
-            '--disable-blink-features=AutomationControlled'
-        ]
-    });
+const client = new scrapingbee.ScrapingBeeClient('S00M9ZXHKXQ0JSBZWRS3ERMQ30993UF1CW4VMSQI1T6280GL8LX555DZUNAGI0M2NRGFLVRTI9RMF15N');
 
-    // Use a genuine User-Agent and device profile
-    const context = await browser.newContext({
-        ...iPhone,
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:104.0) Gecko/20100101 Firefox/104.0',
-        // Some websites look at timezone, language, etc.
-        locale: 'en-US',
-        timezoneId: 'Europe/Berlin'
-    });
+/**
+ * Fetch page content using ScrapingBee API.
+ * @param {string} url - The URL to scrape.
+ * @param {Object|null} scenario - Optional scenario for custom interactions.
+ * @returns {Promise<string|null>} - The HTML content of the page or null if there's an error.
+ */
+async function fetchPageContent(url, scenario = null) {
+    try {
+        const params = {
+            render_js: true,        // Enable JavaScript rendering
+            premium_proxy: true,    // Use high-quality proxies
+            block_ads: true,        // Block ads to speed up loading
+            country_code: 'de'      // Simulate a German user (change as needed)
+        };
 
-    // Hide webdriver flag
-    await context.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    });
+        if (scenario) {
+            params.js_scenario = JSON.stringify(scenario);
+        }
 
-    const page = await context.newPage();
+        console.debug(`Requesting ${url} with params: ${JSON.stringify(params)}`);
+        const response = await client.get({ url, params });
 
-    // Random delay function
-    async function humanDelay(min = 1000, max = 3000) {
-        const ms = Math.floor(Math.random() * (max - min + 1)) + min;
-        await page.waitForTimeout(ms);
+        if (response.status === 200) {
+            return response.data;
+        } else {
+            console.error(`ScrapingBee error ${response.status}: ${response.statusText}`);
+            return null;
+        }
+    } catch (error) {
+        console.error(`Error fetching ${url}:`, error.message);
+        return null;
     }
+}
 
-    // Example flow
-    await page.goto('https://www.natomultimedia.tv/app/search?s.q=&s.o=date&s.g=1', { waitUntil: 'domcontentloaded' });
-    await humanDelay();
-    // Interact with the page so Cloudflare sees "human" signals
-    await page.click('button[data-target="#login"]');
-    await page.fill('input#f49', 'martin@crisp.hr');
-    await page.fill('input#f50', '20wVUSDwZR7Jkk9Y');
-    await humanDelay();
-    await page.click('button[name="login@action"]');
+/**
+ * Simulates a human-like delay between actions.
+ * @param {number} min - Minimum milliseconds.
+ * @param {number} max - Maximum milliseconds.
+ */
+async function humanDelay(min = 1000, max = 3000) {
+    return new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min));
+}
 
-    // Possibly wait for a known post-login element to appear
-    await page.waitForSelector('button#dropdownMenu1', { timeout: 60000 });
-
-    // Continue your scraping...
-
-    await browser.close();
-})();
+module.exports = { fetchPageContent, humanDelay };
