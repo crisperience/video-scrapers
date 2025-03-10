@@ -6,7 +6,7 @@ const { initDB, videoExists, saveMetadata, getUnanalyzedVideos, setMomentslabID 
 const { randomDelay, retry, acceptCookies, parseRelativeDate, getVideoDetails, formatDuration } = require('./utils');
 const { API_TOKEN, ANALYSIS_URL } = require('../../common/config');
 
-const YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@ecbeuro/videos";
+const YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@greenpeace/videos";
 
 async function getYouTubeVideos(page) {
     await page.goto(YOUTUBE_CHANNEL_URL, { waitUntil: 'networkidle', timeout: 90000 });
@@ -65,7 +65,7 @@ async function scrapeLatestFive() {
                 logger.debug(`Fetching metadata for video ${vid.videoUrl}...`);
                 if (!(await videoExists(vid.videoId))) {
                     await saveMetadata(
-                        "European Central Bank",
+                        "Greenpeace",
                         vid.videoId,
                         vid.publishedDate,
                         vid.title,
